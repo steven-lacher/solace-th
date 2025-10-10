@@ -20,16 +20,29 @@ export async function GET(request: Request): Promise<Response> {
   const offset = (page - 1) * limit;
 
   try {
+    // Check if user is searching specifically for years of experience
+    // Examples: "3 years", "15 yrs", "5 years of experience"
+    // Returns advocates with AT LEAST that many years (minimum threshold)
+    const yearsMatch = search.match(/^(\d+)\s*(year|yr|yrs|years)(\s+of\s+experience)?$/i);
+
     // Build search conditions once (avoids type issues with query mutation)
     const searchConditions = search
-      ? or(
-          ilike(advocates.firstName, `%${search}%`),
-          ilike(advocates.lastName, `%${search}%`),
-          ilike(advocates.city, `%${search}%`),
-          ilike(advocates.degree, `%${search}%`),
-          // Note: JSONB search on specialties array - converts to text for search
-          sql`${advocates.specialties}::text ILIKE ${`%${search}%`}`
-        )
+      ? yearsMatch
+        ? // If searching for years, return advocates with AT LEAST that many years
+          sql`${advocates.yearsOfExperience} >= ${parseInt(yearsMatch[1], 10)}`
+        : // Otherwise, search all text fields
+          or(
+            ilike(advocates.firstName, `%${search}%`),
+            ilike(advocates.lastName, `%${search}%`),
+            ilike(advocates.city, `%${search}%`),
+            ilike(advocates.degree, `%${search}%`),
+            // Phone number search - convert to text for partial matching
+            sql`${advocates.phoneNumber}::text ILIKE ${`%${search}%`}`,
+            // Years of experience search - convert to text for partial matching
+            sql`${advocates.yearsOfExperience}::text ILIKE ${`%${search}%`}`,
+            // JSONB search on specialties array - converts to text for search
+            sql`${advocates.specialties}::text ILIKE ${`%${search}%`}`
+          )
       : undefined;
 
     // Get total count for pagination
@@ -45,7 +58,14 @@ export async function GET(request: Request): Promise<Response> {
       ? db.select().from(advocates).where(searchConditions).limit(limit).offset(offset)
       : db.select().from(advocates).limit(limit).offset(offset);
 
-    const data = await query;
+    const results = await query;
+
+    // Cast types to match Advocate interface
+    const data: Advocate[] = results.map((advocate) => ({
+      ...advocate,
+      specialties: advocate.specialties as string[],
+      createdAt: advocate.createdAt ?? undefined,
+    }));
 
     const response: PaginatedResponse = {
       data,
